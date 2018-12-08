@@ -82,7 +82,7 @@ void MainWindow::findAllFilesInDirectory(QString const &dirPath)
         mb.exec();
         return;
     }
-    QStringList files = curDir.entryList(QDir::Files);
+    QStringList files = curDir.entryList(QDir::Files | QDir::NoSymLinks);
     QStringList dirs = curDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for(QString &file : files)
     {
