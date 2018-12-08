@@ -9,14 +9,16 @@
 #include <QTimer>
 #include <QProgressDialog>
 
+#include "QtConcurrent/qtconcurrentrun.h"
 #include "QtConcurrent/qtconcurrentmap.h"
 
 
 quint8 threadsCount;
-quint64 progress = 0, sizeOfAllFiles = 0;
+quint64 MainWindow::progress = 0, sizeOfAllFiles = 0;
 std::map<std::pair<quint64, QByteArray>, QStringList> MainWindow::hashedFiles;
+std::vector<std::pair<quint64, QString> > MainWindow::foundedFiles;
 QMutex MainWindow::mutex;
-QFutureWatcher<void> MainWindow::watcher;
+QFutureWatcher<void> MainWindow::hashingWatcher, MainWindow::indexingWatcher;
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -26,6 +28,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
     ui->treeWidget->setHeaderLabel("Repeated files:");
     ui->spinBox->setValue(QThread::idealThreadCount());
+    connect(&indexingWatcher, SIGNAL(finished()), this, SLOT(allFilesWasIndexed()));
 }
 
 MainWindow::~MainWindow()
@@ -52,7 +55,7 @@ void MainWindow::getHashOfFile(QFile &file, QCryptographicHash &hashMaker)
     quint64 handled = 0;
     for(size_t i = 0; i < countFullBLocks; ++i)
     {
-        file.seek(i * blockSize);
+        //file.seek(i * blockSize);
         hashMaker.addData(file.read(blockSize));
         handled += blockSize >> 10;
         if(mutex.try_lock())
@@ -60,57 +63,39 @@ void MainWindow::getHashOfFile(QFile &file, QCryptographicHash &hashMaker)
             progress += handled;
             mutex.unlock();
             handled = 0;
-            emit MainWindow::watcher.progressValueChanged(progress);
+            emit MainWindow::hashingWatcher.progressValueChanged(progress);
         }
     }
-    file.seek(blockSize * countFullBLocks);
+    //file.seek(blockSize * countFullBLocks);
     hashMaker.addData(file.read(partInTheEnd));
     mutex.lock();
     progress += partInTheEnd >> 10;
     mutex.unlock();
-    emit MainWindow::watcher.progressValueChanged(progress);
+    emit MainWindow::hashingWatcher.progressValueChanged(progress);
     file.close();
 }
 
 void MainWindow::findAllFilesInDirectory(QString const &dirPath)
 {
     QDir curDir(dirPath);
-    if(!curDir.exists())
+    if(!curDir.isReadable() || !curDir.exists())
     {
-        QMessageBox mb;
-        mb.setText("Directory " + dirPath + " doesn't exist");
-        mb.exec();
         return;
     }
     QStringList files = curDir.entryList(QDir::Files | QDir::NoSymLinks);
     QStringList dirs = curDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for(QString &file : files)
+    for(QString &fileName : files)
     {
-        QString filePath(dirPath + "/" + file);
-        foundedFiles.push_back({QFileInfo(filePath).size(), filePath});
+        QString filePath(dirPath + "/" + fileName);
+        QFileInfo fileInfo(filePath);
+        if(fileInfo.isReadable())
+        {
+            foundedFiles.push_back({fileInfo.size(), filePath});
+        }
     }
     for(QString &dir : dirs)
     {
         findAllFilesInDirectory(dirPath + "/" + dir);
-    }
-}
-
-void MainWindow::distributeFilesEvenly()
-{
-    distributedFiles.resize(threadsCount);
-    std::sort(foundedFiles.rbegin(), foundedFiles.rend());
-    std::set<std::pair<quint64, quint8> > minCompletedThread;
-    for(size_t i = 0; i < threadsCount; ++i)
-    {
-        minCompletedThread.insert({0, i});
-    }
-    for(std::pair<quint64, QString> &file : foundedFiles)
-    {
-        auto it = minCompletedThread.begin();
-        std::pair<quint64, quint8> curThread = *it;
-        minCompletedThread.erase(it);
-        distributedFiles[curThread.second].push_back(file.second);
-        minCompletedThread.insert({curThread.first + file.first, curThread.second});
     }
 }
 
@@ -139,6 +124,25 @@ void MainWindow::deleteFileWithUniqSize()
         }
     }
     foundedFiles.resize(cntGoodFiles);
+}
+
+void MainWindow::distributeFilesEvenly()
+{
+    distributedFiles.resize(threadsCount);
+    std::sort(foundedFiles.rbegin(), foundedFiles.rend());
+    std::set<std::pair<quint64, quint8> > minCompletedThread;
+    for(size_t i = 0; i < threadsCount; ++i)
+    {
+        minCompletedThread.insert({0, i});
+    }
+    for(std::pair<quint64, QString> &file : foundedFiles)
+    {
+        auto it = minCompletedThread.begin();
+        std::pair<quint64, quint8> curThread = *it;
+        minCompletedThread.erase(it);
+        distributedFiles[curThread.second].push_back(file.second);
+        minCompletedThread.insert({curThread.first + file.first, curThread.second});
+    }
 }
 
 void MainWindow::handleBlockOfFiles(const std::vector<QString>& block)
@@ -194,11 +198,16 @@ void MainWindow::on_startScanning_clicked()
 
     ui->spinBox->setEnabled(false);
     ui->startScanning->setEnabled(false);
-    ui->statusBar->showMessage("Hashing files in directory...");
-    threadsCount = ui->spinBox->value();
-    findAllFilesInDirectory(ui->directoryPath->text());
+    ui->pushButton->setEnabled(false);
+
+    indexingWatcher.setFuture(QtConcurrent::run(findAllFilesInDirectory, ui->directoryPath->text()));
+    ui->statusBar->showMessage("Indexing files in directory...");
+}
+
+void MainWindow::allFilesWasIndexed()
+{
     deleteFileWithUniqSize();
-    threadsCount = qMin(threadsCount, (quint8)foundedFiles.size());
+    threadsCount = qMin(ui->spinBox->value(), (int)foundedFiles.size());
     distributeFilesEvenly();
 
     if(sizeOfAllFiles != 0)
@@ -206,17 +215,16 @@ void MainWindow::on_startScanning_clicked()
         QProgressDialog pdialog;
         pdialog.setLabelText("Hashing a files...");
         pdialog.setRange(0, sizeOfAllFiles>>10);
-        connect(&pdialog, SIGNAL(canceled()), &watcher, SLOT(cancel()));
-        connect(&watcher, SIGNAL(finished()), &pdialog, SLOT(reset()));
-        connect(&watcher, SIGNAL(progressValueChanged(int)), &pdialog, SLOT(setValue(int)));
+        connect(&pdialog, SIGNAL(canceled()), &hashingWatcher, SLOT(cancel()));
+        connect(&hashingWatcher, SIGNAL(finished()), &pdialog, SLOT(reset()));
+        connect(&hashingWatcher, SIGNAL(progressValueChanged(int)), &pdialog, SLOT(setValue(int)));
 
-        future = QtConcurrent::map(distributedFiles, &MainWindow::handleBlockOfFiles);
-        watcher.setFuture(future);
+        hashingWatcher.setFuture(QtConcurrent::map(distributedFiles, &MainWindow::handleBlockOfFiles));
 
         pdialog.exec();
-        watcher.waitForFinished();
+        hashingWatcher.waitForFinished();
 
-        if(watcher.isCanceled())
+        if(hashingWatcher.isCanceled())
         {
             QMessageBox::critical(this, "Canceled", "Hashing has been canceled.");
         }

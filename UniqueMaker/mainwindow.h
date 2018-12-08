@@ -22,21 +22,23 @@ public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
 
-    QFuture<void> future;
+    static quint64 progress;
     static QMutex mutex;
-    static QFutureWatcher<void> watcher;
+    static QFutureWatcher<void> hashingWatcher;
+    static QFutureWatcher<void> indexingWatcher;
     static std::map<std::pair<quint64, QByteArray>, QStringList> hashedFiles;
-    std::vector<std::pair<quint64, QString> > foundedFiles;
+    static std::vector<std::pair<quint64, QString> > foundedFiles;
     std::vector<std::vector<QString> > distributedFiles;
 
 private slots:
     void on_pushButton_clicked();
     void on_startScanning_clicked();
     void on_pushButton_2_clicked();
+    void allFilesWasIndexed();
 
 private:
     Ui::MainWindow *ui;
-    void findAllFilesInDirectory(QString const &curDirPath);
+    static void findAllFilesInDirectory(QString const &curDirPath);
     void distributeFilesEvenly();
     void deleteFileWithUniqSize();
     void fillTreeWidget();
