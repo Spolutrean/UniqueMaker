@@ -15,6 +15,7 @@
 quint8 threadsCount;
 quint64 progress = 0, sizeOfAllFiles = 0;
 std::map<std::pair<quint64, QByteArray>, QStringList> MainWindow::hashedFiles;
+QMutex MainWindow::mutex;
 QFutureWatcher<void> MainWindow::watcher;
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -49,10 +50,9 @@ void MainWindow::getHashOfFile(QFile &file, QCryptographicHash &hashMaker)
     quint64 countFullBLocks = file.size() / blockSize;
     quint64 partInTheEnd = file.size() - blockSize * countFullBLocks;
     quint64 handled = 0;
-    QMutex mutex;
     for(size_t i = 0; i < countFullBLocks; ++i)
     {
-        //file.seek(i * blockSize);
+        file.seek(i * blockSize);
         hashMaker.addData(file.read(blockSize));
         handled += blockSize >> 10;
         if(mutex.try_lock())
@@ -63,7 +63,7 @@ void MainWindow::getHashOfFile(QFile &file, QCryptographicHash &hashMaker)
             emit MainWindow::watcher.progressValueChanged(progress);
         }
     }
-    //file.seek(blockSize * countFullBLocks);
+    file.seek(blockSize * countFullBLocks);
     hashMaker.addData(file.read(partInTheEnd));
     mutex.lock();
     progress += partInTheEnd >> 10;
@@ -119,6 +119,11 @@ void MainWindow::deleteFileWithUniqSize()
     std::map<quint64, std::vector<QString> > mp;
     for(auto &file : foundedFiles)
     {
+        if(file.first == 0)
+        {
+            hashedFiles[std::make_pair(0, "")].push_back(file.second);
+            continue;
+        }
         mp[file.first].push_back(file.second);
     }
     int cntGoodFiles = 0;
@@ -149,7 +154,6 @@ void MainWindow::handleBlockOfFiles(const std::vector<QString>& block)
         hashMaker.reset();
     }
 
-    QMutex mutex;
     mutex.lock();
     for(auto &files : hashedFilesInBlock) {
         hashedFiles[files.first].push_back(files.second);
@@ -187,19 +191,21 @@ void MainWindow::on_startScanning_clicked()
     progress = 0;
     distributedFiles.clear();
 
+
     ui->spinBox->setEnabled(false);
     ui->startScanning->setEnabled(false);
     ui->statusBar->showMessage("Hashing files in directory...");
     threadsCount = ui->spinBox->value();
     findAllFilesInDirectory(ui->directoryPath->text());
     deleteFileWithUniqSize();
+    threadsCount = qMin(threadsCount, (quint8)foundedFiles.size());
     distributeFilesEvenly();
 
     if(sizeOfAllFiles != 0)
     {
         QProgressDialog pdialog;
         pdialog.setLabelText("Hashing a files...");
-        pdialog.setRange(1, sizeOfAllFiles>>10);
+        pdialog.setRange(0, sizeOfAllFiles>>10);
         connect(&pdialog, SIGNAL(canceled()), &watcher, SLOT(cancel()));
         connect(&watcher, SIGNAL(finished()), &pdialog, SLOT(reset()));
         connect(&watcher, SIGNAL(progressValueChanged(int)), &pdialog, SLOT(setValue(int)));

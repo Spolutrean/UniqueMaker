@@ -7,7 +7,7 @@
 #include <QFuture>
 #include <QFutureWatcher>
 #include <vector>
-#include <map>
+#include <unordered_map>
 #include <QString>
 #include <QStringList>
 namespace Ui {
@@ -23,6 +23,7 @@ public:
     ~MainWindow();
 
     QFuture<void> future;
+    static QMutex mutex;
     static QFutureWatcher<void> watcher;
     static std::map<std::pair<quint64, QByteArray>, QStringList> hashedFiles;
     std::vector<std::pair<quint64, QString> > foundedFiles;
