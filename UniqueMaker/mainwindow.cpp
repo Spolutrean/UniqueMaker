@@ -152,6 +152,10 @@ void MainWindow::handleBlockOfFiles(const std::vector<QString>& block)
 
     for(const QString& filePath : block) {
         QFile file(filePath);
+        if(!file.isReadable())
+        {
+            continue;
+        }
         getHashOfFile(file, hashMaker);
         QByteArray hash = hashMaker.result();
         hashedFilesInBlock.push_back(std::make_pair(std::make_pair(file.size(), hash), filePath));
