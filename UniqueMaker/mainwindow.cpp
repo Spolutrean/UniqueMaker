@@ -83,7 +83,7 @@ void MainWindow::findAllFilesInDirectory(QString const &dirPath)
         return;
     }
     QStringList files = curDir.entryList(QDir::Files | QDir::NoSymLinks);
-    QStringList dirs = curDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QStringList dirs = curDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
     for(QString &fileName : files)
     {
         QString filePath(dirPath + "/" + fileName);
@@ -147,15 +147,11 @@ void MainWindow::distributeFilesEvenly()
 
 void MainWindow::handleBlockOfFiles(const std::vector<QString>& block)
 {
-    QCryptographicHash hashMaker(QCryptographicHash::Keccak_224);
+    QCryptographicHash hashMaker(QCryptographicHash::Keccak_512);
     std::vector<std::pair<std::pair<quint64, QByteArray>, QString> > hashedFilesInBlock;
 
     for(const QString& filePath : block) {
         QFile file(filePath);
-        if(!file.isReadable())
-        {
-            continue;
-        }
         getHashOfFile(file, hashMaker);
         QByteArray hash = hashMaker.result();
         hashedFilesInBlock.push_back(std::make_pair(std::make_pair(file.size(), hash), filePath));
@@ -204,7 +200,7 @@ void MainWindow::on_startScanning_clicked()
     ui->startScanning->setEnabled(false);
     ui->pushButton->setEnabled(false);
 
-    indexingWatcher.setFuture(QtConcurrent::run(findAllFilesInDirectory, ui->directoryPath->text()));
+    indexingWatcher.setFuture(QtConcurrent::run(&MainWindow::findAllFilesInDirectory, ui->directoryPath->text()));
     ui->statusBar->showMessage("Indexing files in directory...");
 }
 
